@@ -97,16 +97,13 @@ impl WatchHandle {
                 end: req.range_end,
             };
 
-            let (watcher, events, revision) = self
-                .kv_watcher
-                .watch(
-                    watch_id,
-                    key_range,
-                    req.start_revision,
-                    req.filters,
-                    self.event_tx.clone(),
-                )
-                .await;
+            let (watcher, events, revision) = self.kv_watcher.watch(
+                watch_id,
+                key_range,
+                req.start_revision,
+                req.filters,
+                self.event_tx.clone(),
+            );
             assert!(
                 self.watcher_map.insert(watch_id, watcher).is_none(),
                 "WatchId {} already exists in watcher_map",
@@ -263,7 +260,7 @@ impl Watch for WatchServer {
                                     watch_handle.handle_watch_request(req).await;
                                 }
                                 Err(e) => {
-                                    panic!("Receive WatchRequest error {:?}", e);
+                                    panic!("Receive WatchRequest error {e:?}");
                                 }
                             }
                         } else {

@@ -111,6 +111,7 @@ impl<C: Command + 'static> State<C> {
     }
 
     /// Update to `term`
+    /// 更新本地的 term，身份降级为 Follower，清楚选举信息
     pub(super) fn update_to_term(&mut self, term: TermNum) {
         debug_assert!(self.term <= term);
         self.term = term;

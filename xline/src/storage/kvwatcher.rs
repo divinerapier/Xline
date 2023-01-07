@@ -184,7 +184,7 @@ impl KvWatcher {
     }
 
     /// Create a watch to KV store
-    pub(crate) async fn watch(
+    pub(crate) fn watch(
         &self,
         id: WatchId,
         key_range: KeyRange,
@@ -194,7 +194,6 @@ impl KvWatcher {
     ) -> (Watcher, Vec<Event>, i64) {
         self.inner
             .watch(id, key_range, start_rev, filters, event_tx)
-            .await
     }
 
     /// Cancel a watch from KV store
@@ -213,7 +212,7 @@ impl KvWatcherInner {
     }
 
     /// Create a watch to KV store
-    async fn watch(
+    fn watch(
         &self,
         id: WatchId,
         key_range: KeyRange,

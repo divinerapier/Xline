@@ -87,15 +87,18 @@ impl Error for NotReachable {
 impl CurpGroup<Node> {
     async fn new(n_nodes: usize) -> Self {
         assert!(n_nodes >= 3);
+
         let listeners = join_all(
             iter::repeat_with(|| async { TcpListener::bind("0.0.0.0:0").await.unwrap() })
                 .take(n_nodes),
         )
         .await;
+
         let all: Vec<_> = listeners
             .iter()
             .enumerate()
             .map(|(i, listener)| (format!("S{i}"), listener.local_addr().unwrap().to_string()))
+            .inspect(|x| tracing::info!("{x:?}",))
             .collect();
 
         let nodes = listeners
@@ -347,6 +350,8 @@ async fn propose_after_reelect() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn fast_round_is_slower_than_slow_round() {
     let group = CurpGroup::new(3).await;
+    tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+    tracing::info!("create curp group");
     let client = group.new_client().await;
     let cmd = Arc::new(TestCommand::new_get(0, vec![0]));
 

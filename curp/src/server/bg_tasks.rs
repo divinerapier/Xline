@@ -347,12 +347,16 @@ fn handle_after_sync_leader<C: Command + 'static>(
     let needs_execute = {
         // the leader will see if the command needs execution from cmd board
         let cmd_board = cmd_board.lock();
-        let cmd_state = if let Some(cmd_state) = cmd_board.cmd_states.get(cmd.id()) {
-            cmd_state
-        } else {
+        let Some(cmd_state) =   cmd_board.cmd_states.get(cmd.id()) else {
             error!("No cmd {:?} in command board", cmd.id());
-            return;
+            return
         };
+        // let cmd_state = if let Some(cmd_state) = cmd_board.cmd_states.get(cmd.id()) {
+        //     cmd_state
+        // } else {
+        //     error!("No cmd {:?} in command board", cmd.id());
+        //     return;
+        // };
         match *cmd_state {
             CmdState::Execute => true,
             CmdState::AfterSync => false,
@@ -392,9 +396,7 @@ fn handle_after_sync_leader<C: Command + 'static>(
         let resp = resp.await;
 
         let mut cmd_board = cmd_board.lock();
-        let cmd_state = if let Some(cmd_state) = cmd_board.cmd_states.get_mut(&cmd_id) {
-            cmd_state
-        } else {
+        let Some(cmd_state) = cmd_board.cmd_states.get_mut(&cmd_id) else {
             error!("No cmd {:?} in command board", cmd_id);
             return;
         };
@@ -423,6 +425,8 @@ const CANDIDATE_TIMEOUT: Duration = Duration::from_secs(1);
 const FOLLOWER_TIMEOUT: Range<u64> = 1000..2000;
 
 /// Background election
+///
+/// 后台选举线程
 async fn bg_election<C: Command + 'static>(
     connects: Vec<Arc<Connect>>,
     state: Arc<RwLock<State<C>>>,
@@ -432,6 +436,8 @@ async fn bg_election<C: Command + 'static>(
         state.map_read(|state| (state.role_trigger(), state.last_rpc_time()));
     loop {
         // only follower or candidate should run this task
+        //
+        // leader 线程等待 role_trigger 的通知
         while state.read().is_leader() {
             role_trigger.listen().await;
         }
@@ -439,11 +445,22 @@ async fn bg_election<C: Command + 'static>(
         let current_role = state.read().role();
         let start_vote = match current_role {
             ServerRole::Follower => {
+                // FOLLOWER 的超时时间为 1-2s 的随机时间，要求每 1-2s 之间必须更新一次 rpc 时间(last_rpc_time)
+                // 生成随机休眠时间 timeout
                 let timeout = Duration::from_millis(thread_rng().gen_range(FOLLOWER_TIMEOUT));
                 // wait until it needs to vote
                 loop {
                     let next_check = last_rpc_time.read().to_owned() + timeout;
                     tokio::time::sleep_until(next_check).await;
+                    // 这里的目的是判断，每 timeout 时间片内，至少更新过一次 last_rpc_time
+                    //
+                    // 原因如下:
+                    //  这里的 last_rpc_time 时间可能与上方的 last_rpc_time 不同
+                    //  如果 last_rpc_time 没有被更新过，也就是用于计算 next_check 的时间
+                    //  那么这里由于时间精度问题，大概率当前时间已经经过了 timeout 时间
+                    //
+                    // 如果在 timeout 时间片内，没有更新过 last_rpc_time，则结束 loop 循环
+                    // 并在赋值 start_vote = true
                     if Instant::now() - *last_rpc_time.read() > timeout {
                         break;
                     }
@@ -451,9 +468,15 @@ async fn bg_election<C: Command + 'static>(
                 true
             }
             ServerRole::Candidate => loop {
+                // Candidate 的超时时间为固定的 1s
                 let next_check = last_rpc_time.read().to_owned() + CANDIDATE_TIMEOUT;
                 tokio::time::sleep_until(next_check).await;
                 // check election status
+
+                // 到达超时时间后校验选举结果
+                //
+                // Follower: 选举失败，降级
+                // Leader: 选举成功，升级
                 match state.read().role() {
                     // election failed, becomes a follower || election succeeded, becomes a leader
                     ServerRole::Follower | ServerRole::Leader => {
@@ -471,13 +494,19 @@ async fn bg_election<C: Command + 'static>(
             continue;
         }
 
+        // 开始新一轮选举
+
+        // FOLLOWER: 当 timeout 时间片内没有更新过 last_rpc_time 时会知道到这里
+
         // start election
         #[allow(clippy::integer_arithmetic)] // TODO: handle possible overflow
         let req = {
             let mut state = state.write();
             let new_term = state.term + 1;
+            // 更新 term
             state.update_to_term(new_term);
             state.set_role(ServerRole::Candidate);
+            // 发起选举，默认给自己投一票
             state.voted_for = Some(state.id().clone());
             state.votes_received = 1;
             VoteRequest::new(
@@ -515,6 +544,7 @@ async fn send_vote<C: Command + 'static>(
 
             // calibrate term
             let state = state.upgradable_read();
+            // 如果响应的 term > 本地的 term，则更新本地 term，终止选举并清楚相关数据
             if resp.term > state.term {
                 let mut state = RwLockUpgradableReadGuard::upgrade(state);
                 state.update_to_term(resp.term);

@@ -385,7 +385,7 @@ impl KvStoreBackend {
     /// Sync a vec of requests
     async fn sync_requests(&self, id: &ProposeId) -> i64 {
         let ctxes = self.sp_exec_pool.lock().remove(id).unwrap_or_else(|| {
-            panic!("Failed to get speculative execution propose id {:?}", id);
+            panic!("Failed to get speculative execution propose id {id:?}",);
         });
         if ctxes.iter().any(RequestCtx::met_err) {
             return self.revision();

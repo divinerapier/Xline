@@ -38,7 +38,8 @@ use crate::{
     missing_copy_implementations
 )]
 mod proto {
-    tonic::include_proto!("messagepb");
+    // tonic::include_proto!("messagepb");
+    include!("./messagepb.rs");
 }
 
 impl FetchLeaderRequest {

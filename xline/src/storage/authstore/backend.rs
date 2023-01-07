@@ -183,9 +183,8 @@ impl AuthStoreBackend {
     fn get_user_permissions(&self, user: &User) -> UserPermissions {
         let mut user_permisiion = UserPermissions::new();
         for role_name in &user.roles {
-            let role = match self.get_role(role_name) {
-                Ok(role) => role,
-                Err(_) => continue,
+            let Ok(role) = self.get_role(role_name) else {
+                continue
             };
             for permission in role.key_permission {
                 let key_range = KeyRange {
@@ -700,7 +699,7 @@ impl AuthStoreBackend {
     /// Sync `RequestWrapper`
     pub(crate) fn sync_request(&self, id: &ProposeId) -> i64 {
         let ctx = self.sp_exec_pool.lock().remove(id).unwrap_or_else(|| {
-            panic!("Failed to get speculative execution propose id {:?}", id);
+            panic!("Failed to get speculative execution propose id {id:?}",);
         });
         if ctx.met_err() {
             return self.header_gen.revision();
@@ -861,9 +860,8 @@ impl AuthStoreBackend {
         req: AuthUserChangePasswordRequest,
         revision: i64,
     ) -> bool {
-        let mut user = match self.get_user(&req.name) {
-            Ok(user) => user,
-            Err(_) => return false,
+        let Ok(mut user) = self.get_user(&req.name) else {
+            return false
         };
         user.password = req.hashed_password.into_bytes();
         self.put_user(&user, revision, 0);
@@ -872,9 +870,8 @@ impl AuthStoreBackend {
 
     /// Sync `AuthUserGrantRoleRequest` and return whether authstore is changed.
     fn sync_user_grant_role_request(&self, req: AuthUserGrantRoleRequest, revision: i64) -> bool {
-        let mut user = match self.get_user(&req.user) {
-            Ok(user) => user,
-            Err(_) => return false,
+        let Ok(mut user) =  self.get_user(&req.user) else {
+             return false
         };
         let role = self.get_role(&req.role);
         if (req.role != ROOT_ROLE) && role.is_err() {
@@ -922,13 +919,11 @@ impl AuthStoreBackend {
 
     /// Sync `AuthUserRevokeRoleRequest` and return whether authstore is changed.
     fn sync_user_revoke_role_request(&self, req: AuthUserRevokeRoleRequest, revision: i64) -> bool {
-        let mut user = match self.get_user(&req.name) {
-            Ok(user) => user,
-            Err(_) => return false,
+        let Ok(mut user) = self.get_user(&req.name) else {
+            return false
         };
-        let idx = match user.roles.binary_search(&req.role) {
-            Ok(idx) => idx,
-            Err(_) => return false,
+        let Ok(idx) = user.roles.binary_search(&req.role) else {
+            return false
         };
         let _ignore = user.roles.remove(idx);
         self.put_user(&user, revision, 0);
@@ -992,13 +987,11 @@ impl AuthStoreBackend {
         req: AuthRoleGrantPermissionRequest,
         revision: i64,
     ) -> bool {
-        let mut role = match self.get_role(&req.name) {
-            Ok(role) => role,
-            Err(_) => return false,
+        let Ok(mut role) = self.get_role(&req.name) else {
+            return false
         };
-        let permission = match req.perm {
-            Some(perm) => perm,
-            None => return false,
+        let Some(permission) = req.perm else {
+            return false
         };
 
         #[allow(clippy::indexing_slicing)] // this index is always valid
@@ -1053,19 +1046,17 @@ impl AuthStoreBackend {
         req: &AuthRoleRevokePermissionRequest,
         next_revision: i64,
     ) -> bool {
-        let mut role = match self.get_role(&req.role) {
-            Ok(role) => role,
-            Err(_) => return false,
+        let Ok(mut role) = self.get_role(&req.role) else {
+            return false
         };
-        let idx = match role
+        let Ok(idx) = role
             .key_permission
             .binary_search_by(|p| match p.key.cmp(&req.key) {
                 Ordering::Equal => p.range_end.cmp(&req.range_end),
                 Ordering::Less => Ordering::Less,
                 Ordering::Greater => Ordering::Greater,
-            }) {
-            Ok(idx) => idx,
-            Err(_) => return false,
+            }) else {
+            return false
         };
         let _ignore = role.key_permission.remove(idx);
         self.put_role(&role, next_revision, 0);

@@ -159,9 +159,9 @@ impl<C: Command + 'static> Rpc<C> {
         tonic::transport::Server::builder()
             .add_service(ProtocolServer::new(server))
             .serve(
-                format!("0.0.0.0:{}", port)
+                format!("0.0.0.0:{port}")
                     .parse()
-                    .map_err(|e| ServerError::ParsingError(format!("{}", e)))?,
+                    .map_err(|e| ServerError::ParsingError(format!("{e}")))?,
             )
             .await?;
         Ok(())
@@ -395,7 +395,7 @@ impl<C: 'static + Command> Protocol<C> {
         let p = request.into_inner();
 
         let cmd: C = p.cmd().map_err(|e| {
-            tonic::Status::invalid_argument(format!("propose cmd decode failed: {}", e))
+            tonic::Status::invalid_argument(format!("propose cmd decode failed: {e}"))
         })?;
 
         (|| async {
@@ -478,7 +478,7 @@ impl<C: 'static + Command> Protocol<C> {
     ) -> Result<tonic::Response<WaitSyncedResponse>, tonic::Status> {
         let ws = request.into_inner();
         let id = ws.id().map_err(|e| {
-            tonic::Status::invalid_argument(format!("wait_synced id decode failed: {}", e))
+            tonic::Status::invalid_argument(format!("wait_synced id decode failed: {e}"))
         })?;
 
         let resp = loop {
@@ -491,7 +491,7 @@ impl<C: 'static + Command> Protocol<C> {
                         state.term,
                     ))
                     .map_err(|err| {
-                        tonic::Status::internal(format!("encode or decode error, {}", err))
+                        tonic::Status::internal(format!("encode or decode error, {err}"))
                     });
                 }
 
@@ -526,7 +526,7 @@ impl<C: 'static + Command> Protocol<C> {
             {
                 let _ignored = self.cmd_board.lock().notifiers.remove(&id);
                 break WaitSyncedResponse::new_error(&SyncError::Timeout).map_err(|err| {
-                    tonic::Status::internal(format!("encode or decode error, {}", err))
+                    tonic::Status::internal(format!("encode or decode error, {err}"))
                 });
             }
         };
@@ -582,7 +582,7 @@ impl<C: 'static + Command> Protocol<C> {
         // append new logs
         let entries = req
             .entries()
-            .map_err(|e| tonic::Status::internal(format!("encode or decode error, {}", e)))?;
+            .map_err(|e| tonic::Status::internal(format!("encode or decode error, {e}")))?;
         state.log.extend(entries.into_iter());
 
         // update commit index

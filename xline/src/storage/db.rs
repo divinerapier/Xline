@@ -41,11 +41,11 @@ impl DB {
         let mut storage = self.storage.lock();
         let prev_kvs: Vec<KeyValue> = revisions
             .iter()
-            .map(|&(ref prev_rev, _)| {
+            .map(|&(prev_rev, _)| {
                 storage
-                    .get(prev_rev)
+                    .get(&prev_rev)
                     .cloned()
-                    .unwrap_or_else(|| panic!("Failed to get revision {:?} from DB", prev_rev))
+                    .unwrap_or_else(|| panic!("Failed to get revision {prev_rev:?} from DB",))
             })
             .collect();
         assert!(

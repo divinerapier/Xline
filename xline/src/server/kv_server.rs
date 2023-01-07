@@ -347,7 +347,7 @@ impl Kv for KvServer {
         if let Response::ResponseRange(response) = res {
             Ok(tonic::Response::new(response))
         } else {
-            panic!("Receive wrong response {:?} for RangeRequest", res);
+            panic!("Receive wrong response {res:?} for RangeRequest",);
         }
     }
 
@@ -373,7 +373,7 @@ impl Kv for KvServer {
         if let Response::ResponsePut(response) = res {
             Ok(tonic::Response::new(response))
         } else {
-            panic!("Receive wrong response {:?} for PutRequest", res);
+            panic!("Receive wrong response {res:?} for PutRequest",);
         }
     }
 
@@ -385,7 +385,7 @@ impl Kv for KvServer {
         &self,
         request: tonic::Request<DeleteRangeRequest>,
     ) -> Result<tonic::Response<DeleteRangeResponse>, tonic::Status> {
-        debug!("Receive DeleteRangeRequest {:?}", request);
+        debug!("Receive DeleteRangeRequest {request:?}",);
         Self::check_delete_range_request(request.get_ref())?;
         let is_fast_path = true;
         let (cmd_res, sync_res) = self.propose(request, is_fast_path).await?;
@@ -399,7 +399,7 @@ impl Kv for KvServer {
         if let Response::ResponseDeleteRange(response) = res {
             Ok(tonic::Response::new(response))
         } else {
-            panic!("Receive wrong response {:?} for DeleteRangeRequest", res);
+            panic!("Receive wrong response {res:?} for DeleteRangeRequest",);
         }
     }
 
@@ -426,7 +426,7 @@ impl Kv for KvServer {
         if let Response::ResponseTxn(response) = res {
             Ok(tonic::Response::new(response))
         } else {
-            panic!("Receive wrong response {:?} for TxnRequest", res);
+            panic!("Receive wrong response {res:?} for TxnRequest",);
         }
     }
 

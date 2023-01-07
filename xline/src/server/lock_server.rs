@@ -137,7 +137,7 @@ impl Lock for LockServer {
                             return Ok(tonic::Response::new(resp));
                         }
                     } else {
-                        panic!("Receive wrong response {:?} for LockRequest", res);
+                        panic!("Receive wrong response {res:?} for LockRequest");
                     }
                 }
                 Err(e) => panic!("Failed to receive response from KV storage, {e}"),
@@ -178,7 +178,7 @@ impl Lock for LockServer {
                         header: response.header,
                     }))
                 } else {
-                    panic!("Receive wrong response {:?} for LockRequest", res);
+                    panic!("Receive wrong response {res:?} for LockRequest");
                 }
             }
             Err(e) => panic!("Failed to receive response from KV storage, {e}"),
