@@ -111,7 +111,7 @@ impl<C: Command + 'static> State<C> {
     }
 
     /// Update to `term`
-    /// 更新本地的 term，身份降级为 Follower，清楚选举信息
+    /// 更新本地的 term，身份降级为 Follower，之前的投票无效，清除选举信息
     pub(super) fn update_to_term(&mut self, term: TermNum) {
         debug_assert!(self.term <= term);
         self.term = term;
@@ -124,6 +124,12 @@ impl<C: Command + 'static> State<C> {
 
     /// Set server role
     pub(super) fn set_role(&mut self, role: ServerRole) {
+        debug!(
+            "server {} change role {:?} -> {:?}",
+            self.id(),
+            self.role,
+            role
+        );
         let prev_role = self.role;
         self.role = role;
         if prev_role != role {

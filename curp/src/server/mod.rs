@@ -611,19 +611,37 @@ impl<C: 'static + Command> Protocol<C> {
         );
 
         // just grab a write lock because it's highly likely that term is updated and a vote is granted
+
+        // 这里直接获取写锁，因为大概率会投票并更新
         let mut state = self.state.write();
 
+        // FIXME: 是否需要验证 req.candidate_id 属于 peers
+        if !state.others.contains_key(&req.candidate_id) {
+            return Ok(tonic::Response::new(VoteResponse::new_reject(state.term)));
+        }
+
         // calibrate term
+
+        // 比较发起者的 term 与本地的 term
         match req.term.cmp(&state.term) {
             Ordering::Less => {
+                // 发起者 term < 本地 term: 拒绝请求
                 return Ok(tonic::Response::new(VoteResponse::new_reject(state.term)));
             }
-            Ordering::Equal => {}
+            Ordering::Equal => {
+                // 发起者 term = 本地 term: 无任何逻辑，准备投票
+            }
             Ordering::Greater => {
+                // 发起者 term > 本地 term:
+                //  1. 更新本地 term
+                //  2. 自身降级为 FOLLOWER
+                //  3. 过期term ，投票无效
+                //  4. 准备投票
                 state.update_to_term(req.term);
             }
         }
 
+        // 每轮 term 只能完成一次投票，不能投票给多个 node
         if let Some(id) = state.voted_for.as_ref() {
             if id != &req.candidate_id {
                 return Ok(tonic::Response::new(VoteResponse::new_reject(state.term)));
@@ -631,10 +649,20 @@ impl<C: 'static + Command> Protocol<C> {
         }
 
         // If a follower receives votes from a candidate, it should update last_rpc_time to prevent itself from starting election
+
+        // FOLLOWER 接受到 vote 请求时，需要更新 last_rpc_time
+        // CANDIDATE 不需要更新 last_rpc_time
         if state.role() == ServerRole::Follower {
             *self.last_rpc_time.write() = Instant::now();
         }
 
+        // 只能投票给:
+        //  1. last_log_term 领先的 node
+        //      req.last_log_term > state.last_log_term()
+        //
+        //  2. last_log_term 相同且 last_log_index 不落后的 node
+        //      (req.last_log_term == state.last_log_term())
+        //          && (req.last_log_index.numeric_cast::<usize>() >= state.last_log_index())
         if req.last_log_term > state.last_log_term()
             || (req.last_log_term == state.last_log_term()
                 && req.last_log_index.numeric_cast::<usize>() >= state.last_log_index())

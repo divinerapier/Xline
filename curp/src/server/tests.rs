@@ -349,7 +349,7 @@ async fn propose_after_reelect() {
 #[traced_test]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn fast_round_is_slower_than_slow_round() {
-    let group = CurpGroup::new(3).await;
+    let group = CurpGroup::new(7).await;
     tokio::time::sleep(std::time::Duration::from_secs(15)).await;
     tracing::info!("create curp group");
     let client = group.new_client().await;

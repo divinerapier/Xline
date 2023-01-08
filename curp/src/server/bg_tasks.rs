@@ -54,16 +54,32 @@ pub(super) async fn run_bg_tasks<C: Command + 'static, CE: 'static + CommandExec
     // notify when a broadcast of append_entries is needed immediately
     let (ae_trigger, ae_trigger_rx) = mpsc::unbounded_channel::<usize>();
 
+    // 后台任务
+    //  0.
     let bg_ae_handle = tokio::spawn(bg_append_entries(
         connects.clone(),
         Arc::clone(&state),
         ae_trigger_rx,
     ));
+    //  1. bg_election: 选举线程
     let bg_election_handle = tokio::spawn(bg_election(connects.clone(), Arc::clone(&state)));
+
+    //  2.
     let bg_apply_handle = tokio::spawn(bg_apply(Arc::clone(&state), cmd_exe_tx, spec));
+
+    //  3. bg_heartbeat: 心跳线程
     let bg_heartbeat_handle = tokio::spawn(bg_heartbeat(connects.clone(), Arc::clone(&state)));
+
+    //  4. 同步 (term, cmd)。从 sync_chan 读取 (term, cmd) 写入到本地的 log，并将最新的 log index 写入到 ae_trigger
+    //  sync_chan 的生产者链路
+    //  -> curp::rpc::Rpc::rpc::propose
+    //      -> curp::server::Protocol::propose
+    //          -> curp::server::Protocol::sync_to_others
+    //  调用 propose 时，会写入一条消息到 sync_chan
     let bg_get_sync_cmds_handle =
         tokio::spawn(bg_get_sync_cmds(Arc::clone(&state), sync_chan, ae_trigger));
+
+    //  5.
     let calibrate_handle = tokio::spawn(leader_calibrates_followers(connects, state));
 
     // spawn cmd execute worker
@@ -102,6 +118,18 @@ async fn bg_get_sync_cmds<C: Command + 'static>(
 
         #[allow(clippy::shadow_unrelated)] // clippy false positive
         state.map_write(|mut state| {
+            // 将 (term, cmd) 写入到本地的 log，并将 log.len() - 1 发送到 ae_trigger(append_entries_trigger)
+            //
+            // 注意，因为:
+            //  1. log[0] 是一个 fake log，因此 log.len() >= 1 恒成立
+            //  2. 当插入 n 条日志时，log.len() = n + 1
+            //  3. 而 state.last_log_index() = log.len() - 1
+            // 因此:
+            //  state.last_log_index() = n + 1 - 1 = n
+            //
+            // 假设这个收到了第一个 (term, cmd)，原 log 数组长度为 1，则该条数据的索引为 1，log.len() = 2
+            // 此时 state.last_log_index() = log.len() - 1 = 2 - 2 = 1
+            // 也就是会将 1 写入到 ae_trigger
             state.log.push(LogEntry::new(term, &[cmd]));
             if let Err(e) = ae_trigger.send(state.last_log_index()) {
                 error!("ae_trigger failed: {}", e);
@@ -121,11 +149,22 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(150);
 const RPC_TIMEOUT: Duration = Duration::from_millis(50);
 
 /// Background `append_entries`, only works for the leader
+///
+/// LEADER 将 log 发送到 peers
 async fn bg_append_entries<C: Command + 'static>(
     connects: Vec<Arc<Connect>>,
     state: Arc<RwLock<State<C>>>,
     mut ae_trigger_rx: mpsc::UnboundedReceiver<usize>,
 ) {
+    // ae_trigger_rx 对应的生产者位于: curp::server::bg_get_sync_cmds
+    // 当写入第一条消息时，log 数组内有两条 LogEntry:
+    //  index(0): fake log
+    //  index(1): 实际写入的 log
+    // 此时，ae_trigger_rx 读取到的内容为 1，即 i = 1、
+    //
+    // 因为，push log entry 到 state.log 时使用读写锁同步，因此，可以分析出
+    // 1. 从 ae_trigger_rx 读取到的数据 i 从 1 开始，并按顺序依次增加 1
+    // 2. i 表示 state.log 数组的索引
     while let Some(i) = ae_trigger_rx.recv().await {
         let req = {
             let state = state.read();
@@ -137,10 +176,15 @@ async fn bg_append_entries<C: Command + 'static>(
             // log.len() >= 1 because we have a fake log[0]
             #[allow(clippy::integer_arithmetic, clippy::indexing_slicing)]
             match AppendEntriesRequest::new(
+                // 本地 term
                 state.term,
+                // 本地 id
                 state.id().clone(),
+                // 上一条数据的索引，应该是用于其他 node 定位本条日志的位置
                 i - 1,
+                // 上一条索引的 term
                 state.log[i - 1].term(),
+                // 日志数据
                 vec![state.log[i].clone()],
                 state.commit_index,
             ) {
@@ -228,6 +272,8 @@ async fn send_log_until_succeed<C: Command + 'static>(
 }
 
 /// Background `append_entries`, only works for the leader
+///
+/// 后台心跳线程，只有 LEADER 需要发送心跳
 async fn bg_heartbeat<C: Command + 'static>(
     connects: Vec<Arc<Connect>>,
     state: Arc<RwLock<State<C>>>,
@@ -236,10 +282,13 @@ async fn bg_heartbeat<C: Command + 'static>(
     #[allow(clippy::integer_arithmetic)] // tokio internal triggered
     loop {
         // only leader should run this task
+
+        // 获取当前状态，如果不是 LEADER 则等待
         while !state.read().is_leader() {
             role_trigger.listen().await;
         }
 
+        // 心跳间隔 150ms
         tokio::time::sleep(HEARTBEAT_INTERVAL).await;
 
         // send append_entries to each server in parallel
@@ -255,7 +304,13 @@ async fn send_heartbeat<C: Command + 'static>(connect: Arc<Connect>, state: Arc<
     // prepare append_entries request args
     #[allow(clippy::shadow_unrelated)] // clippy false positive
     let req = state.map_read(|state| {
+        // state.next_index 记录每个节点的 log entry 索引
         let next_index = state.next_index[connect.id()];
+        // 心跳包中包含:
+        //  1. leader 的 term
+        //  2. leader 的 id
+        //  3. 上次的日志 index
+        //  4. leader 完成 commit 的 id
         AppendEntriesRequest::new_heartbeat(
             state.term,
             state.id().clone(),
@@ -475,8 +530,9 @@ async fn bg_election<C: Command + 'static>(
 
                 // 到达超时时间后校验选举结果
                 //
-                // Follower: 选举失败，降级
-                // Leader: 选举成功，升级
+                // 状态为 Follower | Leader 时，不执行选举流程
+                //  Follower: 选举失败，降级
+                //  Leader:   选举成功，升级
                 match state.read().role() {
                     // election failed, becomes a follower || election succeeded, becomes a leader
                     ServerRole::Follower | ServerRole::Leader => {
@@ -484,6 +540,8 @@ async fn bg_election<C: Command + 'static>(
                     }
                     ServerRole::Candidate => {}
                 }
+                // 当满足条件时，说明自上次更新 last_rpc_time 后，没有再次更新过 last_rpc_time
+                // 则进入到选举流程
                 if Instant::now() - *last_rpc_time.read() > CANDIDATE_TIMEOUT {
                     break true;
                 }
@@ -496,14 +554,22 @@ async fn bg_election<C: Command + 'static>(
 
         // 开始新一轮选举
 
-        // FOLLOWER: 当 timeout 时间片内没有更新过 last_rpc_time 时会知道到这里
+        // FOLLOWER:  当 timeout 时间片内没有更新过 last_rpc_time 时会进入到这里
+        // CANDIDATE: 当 timeout 时间片内没有更新过 last_rpc_time 时会进入到这里
 
+        // 20230108 的想法:
+        //      首先，所有的节点应该都是 FOLLOWER 身份，由于此时不存在 Leader，则会以 FOLLOWER 身份
+        //  发起选举，节点的身份变为 CANDIDATE，并发送 vote() 请求给 peers。
+
+        // 以下为准备 VoteRequest:
         // start election
         #[allow(clippy::integer_arithmetic)] // TODO: handle possible overflow
         let req = {
             let mut state = state.write();
-            let new_term = state.term + 1;
             // 更新 term
+            let new_term = state.term + 1;
+            // update_to_term 会清除之前的投票信息，并将 role 设置为 FOLLOWER
+            // 因此，需要再次调用 state.set_role(ServerRole::Candidate)
             state.update_to_term(new_term);
             state.set_role(ServerRole::Candidate);
             // 发起选举，默认给自己投一票
@@ -517,6 +583,7 @@ async fn bg_election<C: Command + 'static>(
             )
         };
         // reset
+        // 发送 RPC 之前，更新 last_rpc_time
         *last_rpc_time.write() = Instant::now();
         debug!("server {} starts election", req.candidate_id);
 
@@ -536,6 +603,7 @@ async fn send_vote<C: Command + 'static>(
     state: Arc<RwLock<State<C>>>,
     req: VoteRequest,
 ) {
+    // RPC Server 端位于 curp::server::Protocol::vote 函数
     let resp = connect.vote(req, RPC_TIMEOUT).await;
     match resp {
         Err(e) => error!("vote failed, {}", e),
@@ -544,7 +612,7 @@ async fn send_vote<C: Command + 'static>(
 
             // calibrate term
             let state = state.upgradable_read();
-            // 如果响应的 term > 本地的 term，则更新本地 term，终止选举并清楚相关数据
+            // 如果响应的 term > 本地的 term，则更新本地 term，终止选举并清除相关数据
             if resp.term > state.term {
                 let mut state = RwLockUpgradableReadGuard::upgrade(state);
                 state.update_to_term(resp.term);
@@ -558,7 +626,7 @@ async fn send_vote<C: Command + 'static>(
 
             #[allow(clippy::integer_arithmetic)]
             if resp.vote_granted {
-                debug!("vote is granted by server {}", connect.id());
+                debug!("{}: vote is granted by server {}", state.id(), connect.id());
                 let mut state = RwLockUpgradableReadGuard::upgrade(state);
                 state.votes_received += 1;
 
