@@ -292,6 +292,8 @@ impl<C: 'static + Command> Protocol<C> {
         )));
 
         // run background tasks
+
+        // 运行后台任务
         let _bg_handle = tokio::spawn(bg_tasks::run_bg_tasks(
             Arc::clone(&state),
             sync_rx,

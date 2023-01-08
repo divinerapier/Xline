@@ -44,6 +44,8 @@ pub(super) async fn run_bg_tasks<C: Command + 'static, CE: 'static + CommandExec
 ) {
     // establish connection with other servers
     let others = state.read().others.clone();
+
+    // 创建到 others 的 RPC Clients
     let connects = rpc::try_connect(
         others,
         #[cfg(test)]

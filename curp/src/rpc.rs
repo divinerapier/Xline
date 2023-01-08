@@ -350,6 +350,8 @@ pub(crate) struct Connect {
     /// Server id
     id: ServerId,
     /// The rpc connection, if it fails it contains a error, otherwise the rpc client is there
+    ///
+    /// ProtocolClient 是 RPC Client，使用 RwLock 是为了能够重复初始化 Client (见: Connect::get())
     rpc_connect: RwLock<Result<ProtocolClient<tonic::transport::Channel>, tonic::transport::Error>>,
     /// The addr used to connect if failing met
     pub(crate) addr: String,
@@ -476,6 +478,8 @@ impl Connect {
 }
 
 /// Convert a vec of addr string to a vec of `Connect`
+///
+/// addrs 为 <ServerID, Address> 地址映射
 pub(crate) async fn try_connect(
     addrs: HashMap<ServerId, String>,
     #[cfg(test)] reachable: Arc<AtomicBool>,
